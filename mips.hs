@@ -1,4 +1,5 @@
 import Data.Bits
+import Numeric
 --mips primary emuration
 
 data Instraction = Rinst [Char] Int Int Int Int
@@ -20,8 +21,9 @@ fillout _ 0 = []
 fillout a b = a : fillout a (b - 1)
 
 runenv :: Set -> IO ()
-runenv rs = do
-	putStrLn $ show rs
+runenv rs@(Set (sr,rg,m)) = do
+	mapM (\x -> putStr ( showHex x " : ")) rg
+	putStrLn ""
 	x <- getLine
 	case (exc (rs, fetch x)) of
 	     Interrupt y -> do
@@ -47,12 +49,12 @@ exc (st , Rinst "xor" d s t _)         = rctrl xor False st d s t
 exc (st , Rinst "and" d s t _)         = rctrl (.&.) False st d s t
 exc (st , Rinst "or" d s t _)          = rctrl (.|.) False st d s t
 
-exc (st , Rinst "sll" d s _ q)         = ictrl shiftL True st d s q
-exc (st , Rinst "sllv" d s _ q)        = ictrl shiftL True st d s q
-exc (st , Rinst "srl" d s _ q)         = ictrl shiftR True st d s q
-exc (st , Rinst "sra" d s _ q)         = ictrl (\x y -> if ( testBit x 31 )
-   						     then foldr setBit (x `shiftR` y) [31..(32-y)] else x `shiftR` y)
-   					 True st d s q
+exc (st , Rinst "sll" d _ t q)         = ictrl shiftL True st d t q
+exc (st , Rinst "sllv" d s t _)        = rctrl shiftL True st d s t
+exc (st , Rinst "srl" d _ t q)         = ictrl shiftR True st d t q
+exc (st , Rinst "sra" d _ t q)         = ictrl (\x y -> if ( testBit x 31 )
+   						     then foldl setBit (x `shiftR` y) [(32-y)..31] else x `shiftR` y)
+   					 True st d t q
 exc (st , Rinst "srav" d s _ q)        = ictrl shiftR True st d s q
 exc (st , Rinst "srlv" d s _ q)        = ictrl shiftR True st d s q
 exc (st , Iinst "addi" d s im)         = ictrl (+) False st d s im
@@ -61,16 +63,16 @@ exc (st , _)                           = Interrupt $ Set ((0,0,0),[],[])
 
 rctrl :: (Int -> Int -> Int) -> Bool -> Set -> Int -> Int -> Int -> Status
 rctrl f u st@(Set(sr,rs,mem)) d s t  = let p = f (rs !! s) (rs !! t)
-		                           rg = ( take d rs ) ++ p `mod` (1 `shift` 30) : drop (d+1) rs
+		                           rg = ( take d rs ) ++ p `mod` (1 `shift` 32) : drop (d+1) rs
 					   stn = Set (sr, rg, mem)
-	              in if p < (1 `shift` 30) || u then Running stn
+	              in if p < (1 `shift` 32) || u then Running stn
 						    else Interrupt stn
 
 ictrl :: (Int -> Int -> Int) -> Bool -> Set -> Int -> Int -> Int -> Status
 ictrl f u st@(Set(sr,rs,mem)) d s im  = let p = f (rs !! s) im
-		                            rg = ( take d rs ) ++ p `mod` (1 `shift` 30) : drop (d+1) rs
+		                            rg = ( take d rs ) ++ p `mod` (1 `shift` 32) : drop (d+1) rs
 		 			    stn = Set (sr, rg, mem)
-	              in if p < (1 `shift` 30) || u then Running stn
+	              in if p < (1 `shift` 32) || u then Running stn
 						    else Interrupt stn
 
 main :: IO()
