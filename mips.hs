@@ -10,72 +10,77 @@ data Instraction = Rinst [Char] Int Int Int Int
 	deriving (Eq, Show, Read)
 
 newtype Set = Set ((Int,Int,Int),[Int],M.Map Int Int) deriving (Eq, Show, Read)
-data Status = Interrupt Set | Running Set deriving (Eq, Show, Read)
-data SndOp = Imm | Reg deriving (Eq, Show, Read)
+data Context = Interrupt Set | Running Set | Entry Set deriving (Eq, Show, Read)
+data Status a = Byhand a | Auto a deriving (Eq, Show, Read)
+
+data SndOp  = Imm | Reg deriving (Eq, Show, Read)
+data Op     = Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
+            | Slt | Sltu | And | Or | Xor | Nor | Addi | Addiu | Slti | Sltiu | Andi | Ori | Xori | Lui  
+                        deriving (Eq, Show, Read)
 
 initenv :: IO ()
-initenv = runenv $ Set ((0,0,0),(fillout 0 32),M.empty)
+initenv = runenv 0 $ Set ((0,0,0),(fillout 0 32),M.empty)
 
 fillout :: Int -> Int -> [Int]
 fillout _ 0 = []
 fillout a b = a : fillout a (b - 1)
 
-runenv :: Set -> IO ()
-runenv rs@(Set (sr,rg,m)) = do
+runenv :: Int -> Set -> IO ()
+runenv pc rs@(Set (sr,rg,m)) = do
 	mapM (\x -> putStr ( showHex x " : ")) rg
 	putStrLn ""
 	x <- getLine
-	case (exc (rs, fetch x)) of
-	     Interrupt y@(Set (_,_,mem)) -> do
-		      putStrLn "Interrupted"
-		      putStr $ M.showTree mem
-		      runenv y
-	     Running y -> runenv y
+	case (exc (rs, decoder $ fetch x)) of
+	     Interrupt (Set (a,b,mem)) -> do
+		      putStrLn $ "Interrupted at" ++ (show pc)
+		      putStr $ M.showTree $ M.insert pc (fetch x) mem
+		      runenv (pc + 4) $ Set (a, b, M.insert pc (fetch x) mem)
+	     Running (Set (a,b,mem)) -> runenv (pc + 4) $ Set (a, b, M.insert pc (fetch x) mem)
 	where
-	   fetch :: [Char] -> Instraction
-	   fetch xs = read (parse $ words xs) :: Instraction
+	   fetch :: [Char] -> Int
+	   fetch xs = iitable (read (parse $ words xs) :: Instraction)
 	   parse :: [[Char]] -> [Char]
 	   parse (a:b:xs) = unwords $ a : ('"' : b ++ ['"']) : xs
 
-exc :: (Set, Instraction) -> Status
+exc :: (Set, Instraction) -> Context
 exc (Set (sr,rs,mem) , Meta "clear") | rs !! 0 == 1 = Running $ Set (sr, fillout 0 32,mem)
 exc (Set (sr,rs,mem) , Meta "fill") | rs !! 0 == 0  = Running $ Set (sr, fillout 1 32,mem)
 exc (Set (sr,rs,mem) , Meta "hlt")                  = Interrupt $ Set (sr, fillout 0 32,mem)
-exc (context , Meta "mem")                      = Interrupt context
+exc (context , Meta "mem")                          = Interrupt context
+exc (context , Meta "run")                          = Interrupt context
 
-exc (st , Rinst "add" d s t _)         = ctrl (+)   False Reg st d s t
-exc (st , Rinst "addu" d s t _)        = ctrl (+)   True  Reg st d s t
-exc (st , Rinst "sub" d s t _)         = ctrl (-)   False Reg st d s t
-exc (st , Rinst "subu" d s t _)        = ctrl (-)   True  Reg st d s t
-exc (st , Rinst "slt" d s t _)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) True Reg st d s t
-exc (st , Rinst "sltu" d s t _)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) True Reg st d s t
-exc (st , Rinst "and" d s t _)         = ctrl (.&.) True Reg st d s t
-exc (st , Rinst "or" d s t _)          = ctrl (.|.) True Reg st d s t
-exc (st , Rinst "nor" d s t _)         = ctrl (\x y -> xor 0xffffffff $ x .|. y ) True Reg st d s t
-exc (st , Rinst "xor" d s t _)         = ctrl xor   True Reg st d s t
+exc (st , Rinst "add" d s t _)         = ctrl (+)   True  Reg st d s t
+exc (st , Rinst "addu" d s t _)        = ctrl (+)   False Reg st d s t
+exc (st , Rinst "sub" d s t _)         = ctrl (-)   True  Reg st d s t
+exc (st , Rinst "subu" d s t _)        = ctrl (-)   False Reg st d s t
+exc (st , Rinst "slt" d s t _)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
+exc (st , Rinst "sltu" d s t _)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
+exc (st , Rinst "and" d s t _)         = ctrl (.&.) False Reg st d s t
+exc (st , Rinst "or" d s t _)          = ctrl (.|.) False Reg st d s t
+exc (st , Rinst "xor" d s t _)         = ctrl xor   False Reg st d s t
+exc (st , Rinst "nor" d s t _)         = ctrl (\x y -> xor 0xffffffff $ x .|. y ) False Reg st d s t
 
-exc (st , Rinst "sll" d _ t q)         = ctrl shiftL True Imm st d t q
-exc (st , Rinst "sllv" d s t _)        = ctrl shiftL True Reg st d s t
-exc (st , Rinst "srl" d _ t q)         = ctrl shiftR True Imm st d t q
+exc (st , Rinst "sll" d _ t q)         = ctrl shiftL False Imm st d t q
+exc (st , Rinst "srl" d _ t q)         = ctrl shiftR False Imm st d t q
 exc (st , Rinst "sra" d _ t q)         = ctrl (\x y -> if ( testBit x 31 )
    						     then foldl setBit (x `shiftR` y) [(32-y)..31] else x `shiftR` y)
-   					 True Imm st d t q
+   					 False Imm st d t q
+exc (st , Rinst "sllv" d s t _)        = ctrl shiftL False Reg st d s t
 exc (st , Rinst "srav" d s _ q)        = ctrl (\x y -> if ( testBit x 31 )
    						     then foldl setBit (x `shiftR` y) [(32-y)..31] else x `shiftR` y)
-					 True Imm st d s q
-exc (st , Rinst "srlv" t s _ q)        = ctrl shiftR True  Imm st t s q
-exc (st , Iinst "addi" t s im)         = ctrl (+)    False Imm st t s im
-exc (st , Iinst "subi" t s im)         = ctrl (-)    False Imm st t s im
-exc (st , Iinst "addiu" t s im)        = ctrl (+)    True  Imm st t s im
-exc (st , Iinst "subiu" t s im)        = ctrl (-)    True  Imm st t s im
+					 False Imm st d s q
+exc (st , Rinst "srlv" t s _ q)        = ctrl shiftR False  Imm st t s q
 
-exc (st , Iinst "slti" t s im)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) True Imm st t s im
-exc (st , Iinst "sltiu" t s im)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) True Imm st t s im
+exc (st , Iinst "addi" t s im)         = ctrl (+)    True Imm st t s im
+exc (st , Iinst "addiu" t s im)        = ctrl (+)    False  Imm st t s im
 
-exc (st , Iinst "andi" t s im)         = ctrl (.&.) True Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "ori" t s im)          = ctrl (.|.) True Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "xori" t s im )        = ctrl xor   True Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "lui" t s im )         = ctrl (\x _-> x `shiftL` 16 ) True Imm st t s ( im .&. 0xffff )
+exc (st , Iinst "slti" t s im)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
+exc (st , Iinst "sltiu" t s im)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
+
+exc (st , Iinst "andi" t s im)         = ctrl (.&.) False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst "ori" t s im)          = ctrl (.|.) False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst "xori" t s im )        = ctrl xor   False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst "lui" t s im )         = ctrl (\x _-> x `shiftL` 16 ) False Imm st t s ( im .&. 0xffff )
 
 exc (st@(Set (sr,rs,mem)), Iinst "sw" r b o) = let addr = ( (rs !! b) + o )
 					       in  case ( addr `mod` 4 ) of
@@ -94,12 +99,75 @@ exc (st@(Set (sr,rs,mem)), Iinst "lw" r b o) = let addr = ( (rs !! b) + o )
 
 exc (st@(Set ( _ , a , _ ) , _) )      = Interrupt $ Set ( ( 0 , 0 , 0 ) , a , M.empty)
 
-ctrl :: (Int -> Int -> Int) -> Bool -> SndOp -> Set -> Int -> Int -> Int -> Status
+ctrl :: (Int -> Int -> Int) -> Bool -> SndOp -> Set -> Int -> Int -> Int -> Context
 ctrl f u i st@(Set(sr,rs,mem)) d s t  = let p = f (rs !! s) (if i == Reg then (rs !! t) else t)
 		                            rg = ( take d rs ) ++ p `mod` (1 `shift` 32) : drop (d+1) rs
 					    stn = Set (sr, rg, mem)
-	              in if p < (1 `shift` 32) || u then Running stn
-						    else Interrupt stn
+	              in if testBit (xor p $ rs !! d) 31 && u then Interrupt stn
+						    else Running stn
+iitable:: Instraction -> Int
+iitable (Rinst "nop" _ _ _ _)          =     0
+iitable (Rinst "add" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x20
+iitable (Rinst "addu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x21
+iitable (Rinst "sub" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x22
+iitable (Rinst "subu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x23
+iitable (Rinst "slt" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2a
+iitable (Rinst "sltu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2b
+iitable (Rinst "and" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x24
+iitable (Rinst "or" d s t _ )          =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x25
+iitable (Rinst "xor" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x26
+iitable (Rinst "nor" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x27
+
+iitable (Rinst "sll" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x00
+iitable (Rinst "srl" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x02
+iitable (Rinst "sra" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x03
+iitable (Rinst "sllv" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x04
+iitable (Rinst "srav" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x07
+iitable (Rinst "srlv" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x06
+
+iitable (Iinst "addi" t s im )         =  0x08 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "addiu" t s im )        =  0x09 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "slti" t s im )         =  0x0a `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "sltiu" t s im )        =  0x0b `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "andi" t s im )         =  0x0c `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "ori" t s im )          =  0x0d `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "xori" t s im )         =  0x0e `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst "lui" t s im )          =  0x0f `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+
+iitable (Jinst "J" addr)               = 0x02 `shiftL` 26 .|. 0x3fffffff .&. addr
+
+decoder :: Int -> Instraction
+decoder 0     = Meta "mem"
+decoder inst  = case (shiftR ( 0xfc000000 .&. inst ) 26) of
+		    0 -> Rinst ( ( \inst -> case ( inst .&. 0x3f ) of
+	         			    0x00 -> "sll"  
+                                            0x02 -> "srl" 
+                                            0x03 -> "sra" 
+                                            0x04 -> "sllv"
+                                            0x07 -> "srav"
+                                            0x06 -> "srlv"
+                                            0x20 -> "add" 
+                                            0x21 -> "addu"
+	         		            0x22 -> "sub" 
+	         		            0x23 -> "subu"
+                                            0x2a -> "slt" 
+                                            0x2b -> "sltu"
+                                            0x24 -> "and" 
+                                            0x25 -> "or" 
+                                            0x26 -> "xor" 
+                                            0x27 -> "nor"
+				   ) inst ) (cut inst 11) (cut inst 21) (cut inst 16) (cut inst 6)
+		    0x2 -> Jinst "J"     (0x3fffffff .&. inst)
+		    0x8 -> Iinst "addi"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0x9 -> Iinst "addiu" (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xa -> Iinst "slti"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xb -> Iinst "sltiu" (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xc -> Iinst "andi"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xd -> Iinst "ori"   (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xe -> Iinst "xori"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xf -> Iinst "lui"   (cut inst 16) (cut inst 21) (0xffff .&. inst)
+	        where
+		    cut x y = 0x1f .&. (shiftR x y) --inst offset
 
 main :: IO()
 main = initenv
