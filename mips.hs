@@ -1,3 +1,4 @@
+
 import Data.Bits
 import qualified Data.Map as M
 import Numeric
@@ -11,7 +12,7 @@ data Instraction = Rinst [Char] Int Int Int Int
 
 newtype Set = Set ((Int,Int,Int),[Int],M.Map Int Int) deriving (Eq, Show, Read)
 data Context = Interrupt Set | Running Set | Entry Set deriving (Eq, Show, Read)
-data Status a = Byhand a | Auto a deriving (Eq, Show, Read)
+data Status = Byhand | Auto deriving (Eq, Show, Read)
 
 data SndOp  = Imm | Reg deriving (Eq, Show, Read)
 data Op     = Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
@@ -19,33 +20,55 @@ data Op     = Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
                         deriving (Eq, Show, Read)
 
 initenv :: IO ()
-initenv = runenv 0 $ Set ((0,0,0),(fillout 0 32),M.empty)
+initenv = runenv Byhand 0 $ Set ((0,0,0),(fillout 0 32),M.empty)
 
 fillout :: Int -> Int -> [Int]
 fillout _ 0 = []
 fillout a b = a : fillout a (b - 1)
 
-runenv :: Int -> Set -> IO ()
-runenv pc rs@(Set (sr,rg,m)) = do
-	mapM (\x -> putStr ( showHex x " : ")) rg
-	putStrLn ""
-	x <- getLine
-	case (exc (rs, decoder $ fetch x)) of
-	     Interrupt (Set (a,b,mem)) -> do
-		      putStrLn $ "Interrupted at" ++ (show pc)
-		      putStr $ M.showTree $ M.insert pc (fetch x) mem
-		      runenv (pc + 4) $ Set (a, b, M.insert pc (fetch x) mem)
-	     Running (Set (a,b,mem)) -> runenv (pc + 4) $ Set (a, b, M.insert pc (fetch x) mem)
-	where
-	   fetch :: [Char] -> Int
-	   fetch xs = iitable (read (parse $ words xs) :: Instraction)
-	   parse :: [[Char]] -> [Char]
-	   parse (a:b:xs) = unwords $ a : ('"' : b ++ ['"']) : xs
+runenv :: Status -> Int -> Set -> IO ()
+runenv st pc rs@(Set (sr,rg,m)) = let runner' = runner st pc rs
+				      runner'' = runner' 
+		  in case st of
+			  Byhand -> do
+				  mapM (\x -> putStr $ showHex x " : ") rg
+				  putStrLn ""
+				  x <- getLine
+                               	  case mfetch x of
+					      Meta y ->
+						      case y of
+							   "mem" ->
+								   putStr $ M.showTree m
+							   "run" ->
+								   runenv Auto 0 rs
+				              a -> runner' a
+			  Auto -> 
+				  case M.lookup pc m of
+				       Just x -> do
+					       mapM (\x -> putStr ( showHex x " : ")) rg
+					       putStrLn ""
+					       runner' $ decoder x
+				       Nothing -> putStrLn "mem empty" >> runenv Byhand pc rs
+		  where
+		      mfetch :: [Char] -> Instraction
+		      mfetch xs = read (parse $ words xs) :: Instraction
+   	              parse :: [[Char]] -> [Char]
+		      parse (a:b:xs) = unwords $ a : ('"' : b ++ ['"']) : xs
+
+runner :: Status -> Int -> Set -> Instraction -> IO ()
+runner st pc rs@(Set (sr,rg,m)) x = let pc' = case x of
+					          Jinst "j" addr -> addr
+					          _ -> pc + 4
+					in do
+   	                              	case (exc (rs, x)) of
+   	                              	     Interrupt (Set (a,b,mem)) -> do
+   	                              		      putStrLn $ "Interrupted at" ++ (show pc)
+   	                              		      putStr $ M.showTree $ M.insert pc (iitable x) mem
+   	                              		      runenv st pc' $ Set (a, b, M.insert pc (iitable x) mem)
+   	                              	     Running (Set (a,b,mem)) -> runenv st pc' $ Set (a, b, M.insert pc (iitable x) mem)
 
 exc :: (Set, Instraction) -> Context
-exc (Set (sr,rs,mem) , Meta "clear") | rs !! 0 == 1 = Running $ Set (sr, fillout 0 32,mem)
-exc (Set (sr,rs,mem) , Meta "fill") | rs !! 0 == 0  = Running $ Set (sr, fillout 1 32,mem)
-exc (Set (sr,rs,mem) , Meta "hlt")                  = Interrupt $ Set (sr, fillout 0 32,mem)
+exc (Set (sr,rs,mem) , Meta "clear") | rs !! 0 == 1 = Interrupt $ Set (sr, fillout 0 32,mem)
 exc (context , Meta "mem")                          = Interrupt context
 exc (context , Meta "run")                          = Interrupt context
 
@@ -81,6 +104,8 @@ exc (st , Iinst "andi" t s im)         = ctrl (.&.) False Imm st t s ( im .&. 0x
 exc (st , Iinst "ori" t s im)          = ctrl (.|.) False Imm st t s ( im .&. 0xffff )
 exc (st , Iinst "xori" t s im )        = ctrl xor   False Imm st t s ( im .&. 0xffff )
 exc (st , Iinst "lui" t s im )         = ctrl (\x _-> x `shiftL` 16 ) False Imm st t s ( im .&. 0xffff )
+
+exc (st , Jinst "j" _ )                = Running st
 
 exc (st@(Set (sr,rs,mem)), Iinst "sw" r b o) = let addr = ( (rs !! b) + o )
 					       in  case ( addr `mod` 4 ) of
