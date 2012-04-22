@@ -1,12 +1,11 @@
-
 import Data.Bits
 import qualified Data.Map as M
 import Numeric
 --mips primary emuration
 
-data Instraction = Rinst [Char] Int Int Int Int
-                 | Iinst [Char] Int Int Int
-		 | Jinst [Char] Int 
+data Instraction = Rinst Op Int Int Int Int
+                 | Iinst Op Int Int Int
+		 | Jinst Op Int 
 		 | Meta [Char]
 	deriving (Eq, Show, Read)
 
@@ -16,7 +15,7 @@ data Status = Byhand | Auto deriving (Eq, Show, Read)
 
 data SndOp  = Imm | Reg deriving (Eq, Show, Read)
 data Op     = Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
-            | Slt | Sltu | And | Or | Xor | Nor | Addi | Addiu | Slti | Sltiu | Andi | Ori | Xori | Lui  
+            | Slt | Sltu | And | Or | Xor | Nor | Addi | Addiu | Slti | Sltiu | Andi | Ori | Xori | Lui | J
                         deriving (Eq, Show, Read)
 
 initenv :: IO ()
@@ -68,50 +67,46 @@ runner st pc rs@(Set (sr,rg,m)) x = let pc' = case x of
    	                              	     Running (Set (a,b,mem)) -> runenv st pc' $ Set (a, b, M.insert pc (iitable x) mem)
 
 exc :: (Set, Instraction) -> Context
-exc (Set (sr,rs,mem) , Meta "clear") | rs !! 0 == 1 = Interrupt $ Set (sr, fillout 0 32,mem)
-exc (context , Meta "mem")                          = Interrupt context
-exc (context , Meta "run")                          = Interrupt context
+exc (st , Rinst Add d s t _)         = ctrl (+)   True  Reg st d s t
+exc (st , Rinst Addu d s t _)        = ctrl (+)   False Reg st d s t
+exc (st , Rinst Sub d s t _)         = ctrl (-)   True  Reg st d s t
+exc (st , Rinst Subu d s t _)        = ctrl (-)   False Reg st d s t
+exc (st , Rinst Slt d s t _)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
+exc (st , Rinst Sltu d s t _)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
+exc (st , Rinst And d s t _)         = ctrl (.&.) False Reg st d s t
+exc (st , Rinst Or d s t _)          = ctrl (.|.) False Reg st d s t
+exc (st , Rinst Xor d s t _)         = ctrl xor   False Reg st d s t
+exc (st , Rinst Nor d s t _)         = ctrl (\x y -> xor 0xffffffff $ x .|. y ) False Reg st d s t
 
-exc (st , Rinst "add" d s t _)         = ctrl (+)   True  Reg st d s t
-exc (st , Rinst "addu" d s t _)        = ctrl (+)   False Reg st d s t
-exc (st , Rinst "sub" d s t _)         = ctrl (-)   True  Reg st d s t
-exc (st , Rinst "subu" d s t _)        = ctrl (-)   False Reg st d s t
-exc (st , Rinst "slt" d s t _)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
-exc (st , Rinst "sltu" d s t _)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Reg st d s t
-exc (st , Rinst "and" d s t _)         = ctrl (.&.) False Reg st d s t
-exc (st , Rinst "or" d s t _)          = ctrl (.|.) False Reg st d s t
-exc (st , Rinst "xor" d s t _)         = ctrl xor   False Reg st d s t
-exc (st , Rinst "nor" d s t _)         = ctrl (\x y -> xor 0xffffffff $ x .|. y ) False Reg st d s t
-
-exc (st , Rinst "sll" d _ t q)         = ctrl shiftL False Imm st d t q
-exc (st , Rinst "srl" d _ t q)         = ctrl shiftR False Imm st d t q
-exc (st , Rinst "sra" d _ t q)         = ctrl (\x y -> if ( testBit x 31 )
+exc (st , Rinst Sll d _ t q)         = ctrl shiftL False Imm st d t q
+exc (st , Rinst Srl d _ t q)         = ctrl shiftR False Imm st d t q
+exc (st , Rinst Sra d _ t q)         = ctrl (\x y -> if ( testBit x 31 )
    						     then foldl setBit (x `shiftR` y) [(32-y)..31] else x `shiftR` y)
    					 False Imm st d t q
-exc (st , Rinst "sllv" d s t _)        = ctrl shiftL False Reg st d s t
-exc (st , Rinst "srav" d s _ q)        = ctrl (\x y -> if ( testBit x 31 )
+exc (st , Rinst Sllv d s t _)        = ctrl shiftL False Reg st d s t
+exc (st , Rinst Srav d s _ q)        = ctrl (\x y -> if ( testBit x 31 )
    						     then foldl setBit (x `shiftR` y) [(32-y)..31] else x `shiftR` y)
 					 False Imm st d s q
-exc (st , Rinst "srlv" t s _ q)        = ctrl shiftR False  Imm st t s q
+exc (st , Rinst Srlv t s _ q)        = ctrl shiftR False  Imm st t s q
 
-exc (st , Iinst "addi" t s im)         = ctrl (+)    True Imm st t s im
-exc (st , Iinst "addiu" t s im)        = ctrl (+)    False  Imm st t s im
+exc (st , Iinst Addi t s im)         = ctrl (+)    True Imm st t s im
+exc (st , Iinst Addiu t s im)        = ctrl (+)    False  Imm st t s im
 
-exc (st , Iinst "slti" t s im)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
-exc (st , Iinst "sltiu" t s im)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
+exc (st , Iinst Slti t s im)         = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
+exc (st , Iinst Sltiu t s im)        = ctrl (\x y -> if ( x < y ) then 1 else 0 ) False Imm st t s im
 
-exc (st , Iinst "andi" t s im)         = ctrl (.&.) False Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "ori" t s im)          = ctrl (.|.) False Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "xori" t s im )        = ctrl xor   False Imm st t s ( im .&. 0xffff )
-exc (st , Iinst "lui" t s im )         = ctrl (\x _-> x `shiftL` 16 ) False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst Andi t s im)         = ctrl (.&.) False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst Ori t s im)          = ctrl (.|.) False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst Xori t s im )        = ctrl xor   False Imm st t s ( im .&. 0xffff )
+exc (st , Iinst Lui t s im )         = ctrl (\x _-> x `shiftL` 16 ) False Imm st t s ( im .&. 0xffff )
 
-exc (st , Jinst "j" _ )                = Running st
+exc (st , Jinst J _ )                = Running st
 
-exc (st@(Set (sr,rs,mem)), Iinst "sw" r b o) = let addr = ( (rs !! b) + o )
+exc (st@(Set (sr,rs,mem)), Iinst Sw r b o) = let addr = ( (rs !! b) + o )
 					       in  case ( addr `mod` 4 ) of
 							0 -> Running $ Set (sr, rs, M.insert ((rs !! b) + o) (rs !! r) mem)
 							_ -> Interrupt st
-exc (st@(Set (sr,rs,mem)), Iinst "lw" r b o) = let addr = ( (rs !! b) + o )
+exc (st@(Set (sr,rs,mem)), Iinst Lw r b o) = let addr = ( (rs !! b) + o )
 						   p = memlook addr mem
 						   rg = ( take r rs ) ++ p `mod` (1 `shift` 32) : drop (r+1) rs
 					       in  case ( addr `mod` 4 ) of
