@@ -14,8 +14,8 @@ data Context = Interrupt Set | Running Set | Entry Set deriving (Eq, Show, Read)
 data Status = Byhand | Auto deriving (Eq, Show, Read)
 
 data SndOp  = Imm | Reg deriving (Eq, Show, Read)
-data Op     = Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
-            | Slt | Sltu | And | Or | Xor | Nor | Addi | Addiu | Slti | Sltiu | Andi | Ori | Xori | Lui | J
+data Op     = Nop | Sll | Srl | Sra | Sllv | Srav | Srlv | Add | Addu | Sub | Subu
+            | Slt | Sltu | And | Or | Xor | Nor | Addi | Addiu | Slti | Sltiu | Andi | Ori | Xori | Lui | J | Sw | Lw
                         deriving (Eq, Show, Read)
 
 initenv :: IO ()
@@ -27,7 +27,6 @@ fillout a b = a : fillout a (b - 1)
 
 runenv :: Status -> Int -> Set -> IO ()
 runenv st pc rs@(Set (sr,rg,m)) = let runner' = runner st pc rs
-				      runner'' = runner' 
 		  in case st of
 			  Byhand -> do
 				  mapM (\x -> putStr $ showHex x " : ") rg
@@ -50,13 +49,11 @@ runenv st pc rs@(Set (sr,rg,m)) = let runner' = runner st pc rs
 				       Nothing -> putStrLn "mem empty" >> runenv Byhand pc rs
 		  where
 		      mfetch :: [Char] -> Instraction
-		      mfetch xs = read (parse $ words xs) :: Instraction
-   	              parse :: [[Char]] -> [Char]
-		      parse (a:b:xs) = unwords $ a : ('"' : b ++ ['"']) : xs
+		      mfetch xs = ( read xs :: Instraction )
 
 runner :: Status -> Int -> Set -> Instraction -> IO ()
 runner st pc rs@(Set (sr,rg,m)) x = let pc' = case x of
-					          Jinst "j" addr -> addr
+					          Jinst J addr -> addr
 					          _ -> pc + 4
 					in do
    	                              	case (exc (rs, x)) of
@@ -107,8 +104,8 @@ exc (st@(Set (sr,rs,mem)), Iinst Sw r b o) = let addr = ( (rs !! b) + o )
 							0 -> Running $ Set (sr, rs, M.insert ((rs !! b) + o) (rs !! r) mem)
 							_ -> Interrupt st
 exc (st@(Set (sr,rs,mem)), Iinst Lw r b o) = let addr = ( (rs !! b) + o )
-						   p = memlook addr mem
-						   rg = ( take r rs ) ++ p `mod` (1 `shift` 32) : drop (r+1) rs
+						 p = memlook addr mem
+						 rg = ( take r rs ) ++ p `mod` (1 `shift` 32) : drop (r+1) rs
 					       in  case ( addr `mod` 4 ) of
 							0 -> Running $ Set (sr, rg, mem)
 							_ -> Interrupt $ Set (sr, rs, mem)
@@ -126,66 +123,66 @@ ctrl f u i st@(Set(sr,rs,mem)) d s t  = let p = f (rs !! s) (if i == Reg then (r
 	              in if testBit (xor p $ rs !! d) 31 && u then Interrupt stn
 						    else Running stn
 iitable:: Instraction -> Int
-iitable (Rinst "nop" _ _ _ _)          =     0
-iitable (Rinst "add" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x20
-iitable (Rinst "addu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x21
-iitable (Rinst "sub" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x22
-iitable (Rinst "subu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x23
-iitable (Rinst "slt" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2a
-iitable (Rinst "sltu" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2b
-iitable (Rinst "and" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x24
-iitable (Rinst "or" d s t _ )          =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x25
-iitable (Rinst "xor" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x26
-iitable (Rinst "nor" d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x27
+iitable (Rinst Nop _ _ _ _)          =     0
+iitable (Rinst Add d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x20
+iitable (Rinst Addu d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x21
+iitable (Rinst Sub d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x22
+iitable (Rinst Subu d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x23
+iitable (Rinst Slt d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2a
+iitable (Rinst Sltu d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x2b
+iitable (Rinst And d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x24
+iitable (Rinst Or d s t _ )          =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x25
+iitable (Rinst Xor d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x26
+iitable (Rinst Nor d s t _ )         =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x27
 
-iitable (Rinst "sll" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x00
-iitable (Rinst "srl" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x02
-iitable (Rinst "sra" d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x03
-iitable (Rinst "sllv" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x04
-iitable (Rinst "srav" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x07
-iitable (Rinst "srlv" d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x06
+iitable (Rinst Sll d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x00
+iitable (Rinst Srl d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x02
+iitable (Rinst Sra d _ t q )         =     t `shiftL` 16 .|. d `shiftL` 11 .|. q `shiftL` 6  .|. 0x03
+iitable (Rinst Sllv d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x04
+iitable (Rinst Srav d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x07
+iitable (Rinst Srlv d s t _ )        =     s `shiftL` 21 .|. t `shiftL` 16 .|. d `shiftL` 11 .|. 0x06
 
-iitable (Iinst "addi" t s im )         =  0x08 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "addiu" t s im )        =  0x09 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "slti" t s im )         =  0x0a `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "sltiu" t s im )        =  0x0b `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "andi" t s im )         =  0x0c `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "ori" t s im )          =  0x0d `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "xori" t s im )         =  0x0e `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
-iitable (Iinst "lui" t s im )          =  0x0f `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Addi t s im )         =  0x08 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Addiu t s im )        =  0x09 `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Slti t s im )         =  0x0a `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Sltiu t s im )        =  0x0b `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Andi t s im )         =  0x0c `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Ori t s im )          =  0x0d `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Xori t s im )         =  0x0e `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
+iitable (Iinst Lui t s im )          =  0x0f `shiftL` 26 .|. s `shiftL` 21 .|. t `shiftL` 16 .|. im
 
-iitable (Jinst "J" addr)               = 0x02 `shiftL` 26 .|. 0x3fffffff .&. addr
+iitable (Jinst J addr)               = 0x02 `shiftL` 26 .|. 0x3fffffff .&. addr
 
 decoder :: Int -> Instraction
 decoder 0     = Meta "mem"
 decoder inst  = case (shiftR ( 0xfc000000 .&. inst ) 26) of
 		    0 -> Rinst ( ( \inst -> case ( inst .&. 0x3f ) of
-	         			    0x00 -> "sll"  
-                                            0x02 -> "srl" 
-                                            0x03 -> "sra" 
-                                            0x04 -> "sllv"
-                                            0x07 -> "srav"
-                                            0x06 -> "srlv"
-                                            0x20 -> "add" 
-                                            0x21 -> "addu"
-	         		            0x22 -> "sub" 
-	         		            0x23 -> "subu"
-                                            0x2a -> "slt" 
-                                            0x2b -> "sltu"
-                                            0x24 -> "and" 
-                                            0x25 -> "or" 
-                                            0x26 -> "xor" 
-                                            0x27 -> "nor"
+	         			    0x00 -> Sll  
+                                            0x02 -> Srl 
+                                            0x03 -> Sra 
+                                            0x04 -> Sllv
+                                            0x07 -> Srav
+                                            0x06 -> Srlv
+                                            0x20 -> Add 
+                                            0x21 -> Addu
+	         		            0x22 -> Sub 
+	         		            0x23 -> Subu
+                                            0x2a -> Slt 
+                                            0x2b -> Sltu
+                                            0x24 -> And 
+                                            0x25 -> Or
+                                            0x26 -> Xor
+                                            0x27 -> Nor
 				   ) inst ) (cut inst 11) (cut inst 21) (cut inst 16) (cut inst 6)
-		    0x2 -> Jinst "J"     (0x3fffffff .&. inst)
-		    0x8 -> Iinst "addi"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0x9 -> Iinst "addiu" (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xa -> Iinst "slti"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xb -> Iinst "sltiu" (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xc -> Iinst "andi"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xd -> Iinst "ori"   (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xe -> Iinst "xori"  (cut inst 16) (cut inst 21) (0xffff .&. inst)
-		    0xf -> Iinst "lui"   (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0x2 -> Jinst J     (0x3fffffff .&. inst)
+		    0x8 -> Iinst Addi  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0x9 -> Iinst Addiu (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xa -> Iinst Slti  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xb -> Iinst Sltiu (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xc -> Iinst Andi  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xd -> Iinst Ori   (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xe -> Iinst Xori  (cut inst 16) (cut inst 21) (0xffff .&. inst)
+		    0xf -> Iinst Lui   (cut inst 16) (cut inst 21) (0xffff .&. inst)
 	        where
 		    cut x y = 0x1f .&. (shiftR x y) --inst offset
 
