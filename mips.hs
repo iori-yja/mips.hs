@@ -1,5 +1,5 @@
 import Data.Bits
-import qualified Data.Map as M
+import qualified Data.Map as M --hoge
 import Numeric
 --mips primary emuration
 
